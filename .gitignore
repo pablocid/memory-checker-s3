@@ -1,0 +1,7 @@
+node_modules
+*.sqlite3
+.DS_Store
+env.json
+private.key
+public.key
+test.js
