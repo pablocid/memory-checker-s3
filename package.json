@@ -1,5 +1,5 @@
 {
-  "name": "memory",
+  "name": "memory-s3",
   "version": "1.0.1",
   "description": "",
   "main": "index.js",
