@@ -147,9 +147,9 @@ function startRegister() {
             })
             .catch(error => console.error(error));
     }, 1000 * SECONDS_INTERVAL);
-    
+
     queryAllAndPutToS3((s) => console.log(s));
-    
+
     setInterval(() => {
         queryAllAndPutToS3((s) => console.log(s));
     }, 1000 * 60 * minutesIntervar);
@@ -234,6 +234,12 @@ function queryAllAndPutToS3(cb) {
         const data = rows.map(m => jsonFormat(m));
         request.get("https://rlchg8hvcc.execute-api.us-west-2.amazonaws.com/prod/memory",
             { headers: { "x-api-key": apikey }, qs: { operation, key, bucket, expires, acl } },
-            (err, resp) => request.put(resp.body, { body: JSON.stringify(data) }, (q, c) => cb(c.statusCode)));
+            (err, resp) => request.put(resp.body, { body: JSON.stringify(data) }, (q, c) => {
+                if (q) {
+                    cb(q)
+                } else {
+                    cb(c.statusCode)
+                }
+            }));
     });
 }
