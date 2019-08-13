@@ -141,7 +141,23 @@ function startRegister() {
             let networkData;
             let dockerData;
 
-            try { memData = await mem(); }
+            try {
+                memData = await mem().then(x => ({
+                    "memory": {
+                        "total": x.total,
+                        "free": x.free,
+                        "used": x.used,
+                        "active": x.active,
+                        "available": x.available,
+                        "buffcache": x.buffcache
+                    },
+                    "swap": {
+                        "total": x.swaptotal,
+                        "used": x.swapused,
+                        "free": x.swapfree
+                    }
+                }));
+            }
             catch (error) { }
 
             try {
