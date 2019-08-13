@@ -1,4 +1,4 @@
-const { mem } = require('systeminformation');
+const { mem, fsSize, dockerInfo, networkStats } = require('systeminformation');
 const express = require('express');
 const request = require('request');
 const { readFileSync, unlinkSync } = require('fs');
@@ -39,6 +39,9 @@ const MAX_RECORDS = process.env.MAX_RECORDS || 100;
 const SECONDS_INTERVAL = process.env.SECONDS_INTERVAL || 60;
 const SERVER_NAME = process.env.SERVER_NAME || "Unknown server";
 const DELETE_SQLITE_FILE_ON_RESTART = process.env.DELETE_SQLITE_FILE_ON_RESTART;
+const DATA_DISK_MOUNT_MEASURE = process.env.DATA_DISK_MOUNT_MEASURE;
+const DATA_NETWORK_IFACE_MEASURE = process.env.DATA_NETWORK_IFACE_MEASURE;
+const APIGATEWAY = process.env.APIGATEWAY;
 let defaultMemoryRecords = 10;
 
 const apikey = process.env.APIGATEWAYKEY;
@@ -90,9 +93,13 @@ const db = new Database(SQLITE_PATH_FILE, async (err) => {
     } else {
         console.log('Database created!')
         await createTable();
-        await createTrigger();
-        startRegister();
+        try {
+            await createTrigger();
+        } catch (error) {
+            console.log("Error in createTrigger: " + error);
+        }
 
+        startRegister();
     }
 });
 
@@ -101,17 +108,7 @@ function createTable() {
         db.run(`
         CREATE TABLE IF NOT EXISTS memory(
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            date TEXT,
-            total INT,
-            free INT,
-            used INT,
-            active INT,
-            available INT,
-            buffcache INT,
-            swaptotal INT,
-            swapused INT,
-            swapfree INT,
-            cpu INT
+            val TEXT
         )    
         `
             , (d, err) => {
@@ -119,7 +116,6 @@ function createTable() {
                 else { res(d); }
             });
     });
-
 }
 function createTrigger() {
     return new Promise((res, rej) => {
@@ -137,16 +133,42 @@ function createTrigger() {
     });
 }
 function startRegister() {
-    setInterval(() => {
-        mem()
-            .then(data => {
-                cpuStat.usagePercent({ sampleMs: 150 }, function (err, percent, seconds) {
-                    if (err) { insertData(data); }
-                    else { insertData({ ...data, cpu: parseInt(percent) }); }
+    setInterval(
+        async () => {
+            let memData;
+            let cpuData;
+            let diskData;
+            let networkData;
+            let dockerData;
+
+            try { memData = await mem(); }
+            catch (error) { }
+
+            try {
+                cpuData = await new Promise((res, rej) => {
+                    cpuStat.usagePercent({ sampleMs: 2000 }, function (err, percent, seconds) {
+                        if (err) { rej(data); }
+                        else { res(parseInt(percent)); }
+                    });
                 });
-            })
-            .catch(error => console.error(error));
-    }, 1000 * SECONDS_INTERVAL);
+            } catch (error) { }
+
+            try {
+                diskData = await fsSize().then(f => f.find(x => x.mount === DATA_DISK_MOUNT_MEASURE)).then(x => ({ use: x.use, mount: x.mount }));
+            } catch (error) { }
+
+            try {
+                networkData = await networkStats().then(data => data.find(x => x.iface === DATA_NETWORK_IFACE_MEASURE)).then(x => ({ operstate: x.operstate, iface: x.iface }));
+            } catch (error) { }
+
+            try {
+                dockerData = await dockerInfo().then(data => ({ containers: data.containers, containersRunning: data.containersRunning }));
+            } catch (error) { }
+            console.log('inserting ...')
+            insertData({ ...memData, cpu: cpuData, disk: diskData, network: networkData, docker: dockerData });
+
+        },
+        1000 * SECONDS_INTERVAL);
 
     queryAllAndPutToS3((s) => console.log(s));
 
@@ -155,40 +177,16 @@ function startRegister() {
     }, 1000 * 60 * minutesIntervar);
 }
 const insertData = (info) => {
-    db.run(`
-    INSERT INTO memory (date, total, free, used, active, available, buffcache, swaptotal, swapused, swapfree, cpu) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [
-            new Date().toISOString(),
-            info.total,
-            info.free,
-            info.used,
-            info.active,
-            info.available,
-            info.buffcache,
-            info.swaptotal,
-            info.swapused,
-            info.swapfree,
-            info.cpu
-        ]);
+    const s = JSON.stringify({ date: new Date().toISOString(), ...info });
+    console.log(typeof s);
+    try {
+        const q = db.prepare(`INSERT INTO memory (val) VALUES (?);`);
+        q.run(s);
+    } catch (error) { console.log("Error in insertData function"); }
+
 }
 function jsonFormat(d) {
-    return {
-        date: d.date,
-        memory: {
-            total: d.total,
-            free: d.free,
-            used: d.used,
-            active: d.active,
-            available: d.available,
-            buffcache: d.buffcache,
-        },
-        swap: {
-            total: d.swaptotal,
-            used: d.swapused,
-            free: d.swapfree
-        },
-        cpu: d.cpu
-    }
+    return JSON.parse(d.val);
 }
 
 const payload = { server: SERVER_NAME };
@@ -230,9 +228,9 @@ app.listen(PORT, () => {
 
 function queryAllAndPutToS3(cb) {
     db.all(`SELECT * FROM memory ORDER BY id DESC`, (err, rows) => {
-        if (err) { res.send(err); return; }
+        if (err) { cb(err); return; }
         const data = rows.map(m => jsonFormat(m));
-        request.get("https://rlchg8hvcc.execute-api.us-west-2.amazonaws.com/prod/memory",
+        request.get(APIGATEWAY,
             { headers: { "x-api-key": apikey }, qs: { operation, key, bucket, expires, acl } },
             (err, resp) => request.put(resp.body, { body: JSON.stringify(data) }, (q, c) => {
                 if (q) {
