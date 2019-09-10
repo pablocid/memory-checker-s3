@@ -246,7 +246,7 @@ function queryAllAndPutToS3(cb) {
         const data = rows.map(m => jsonFormat(m));
         request.get(APIGATEWAY,
             { headers: { "x-api-key": apikey }, qs: { operation, key, bucket, expires, acl } },
-            (err, resp) => request.put(resp.body, { body: JSON.stringify(data) }, (q, c) => {
+            (err, resp) => request.put(resp.body, { body: JSON.stringify(data), headers: { 'Cache-Control': 'max-age=480' } }, (q, c) => {
                 if (q) {
                     cb(q)
                 } else {
